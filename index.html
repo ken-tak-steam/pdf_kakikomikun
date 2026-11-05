@@ -16,7 +16,7 @@ footer{text-align:center;padding:22px;font-size:13px;color:#63768a}footer a{colo
 <div class="bar"><label class="btn" for="file">PDFを開く</label><input id="file" type="file" style="display:none" accept=".pdf,application/pdf"><button id="add" class="secondary" disabled>＋ 文字を追加</button><label>フォント<select id="font"><option value="gothic">和文：ゴシック</option><option value="mincho">和文：明朝</option><option value="arial">英文：Arial</option><option value="times">英文：Times New Roman</option><option value="courier">英文：Courier New</option></select></label><label>サイズ<input id="size" type="number" min="6" max="96" value="16"></label><label>色<input id="color" type="color" value="#1c2c40"></label><button id="erase" class="secondary" disabled>選択した文字を削除</button></div>
 <div class="bar"><label>保存名<input id="saveName" type="text" value="書き込み.pdf"></label><button id="save" disabled>名前を付けて保存（PDF）</button><span class="note" role="status" id="status"></span></div>
 <main><div id="drop"><strong>ここにPDFをドラッグ＆ドロップ</strong><p>または「PDFを開く」を選択してください。</p></div>
-<div id="stage"><div class="nav"><button id="prev" class="secondary">◀ 前</button><span id="pages"></span><button id="next" class="secondary">次 ▶</button></div><p class="note">ページをタップして文字を追加できます。文字を入力し、青い取っ手で位置を移動します。追加した文字を選択すると書体・大きさ・色を変更できます。</p><div id="holder"><canvas id="paper"></canvas><div id="layer"></div></div></div>
+<div id="stage"><div class="nav"><button id="prev" class="secondary">◀ 前</button><span id="pages"></span><button id="next" class="secondary">次 ▶</button></div><p class="note">PDFは高解像度で表示します。ページをタップして文字を追加できます。文字を入力し、青い取っ手で位置を移動します。追加した文字を選択すると書体・大きさ・色を変更できます。</p><div id="holder"><canvas id="paper"></canvas><div id="layer"></div></div></div>
 <div id="fallback"><strong>このPDFには暗号化設定があります。</strong><p>元のPDF構造を維持する保存には対応していません。必要であれば、ページ全体を画像化したPDFとして保存できます。<strong>画像化すると元の文字検索・文字選択・リンクは失われます。</strong> 元のファイルは変更しません。</p><button id="flatten">画像化して別名で保存</button></div>
 <div id="ready"><strong>保存用PDFの準備ができました。</strong><p>次のリンクからダウンロードしてください。元のPDFは上書きされません。</p><a id="result" href="#" download="書き込み.pdf">PDFをダウンロードする</a></div>
 </main><footer><span>Copyright (c) 2026 Takakura Kentaro</span> ｜ <button id="license-open" type="button">ライセンス情報</button> ｜ <a href="./download.html">アプリのダウンロード</a></footer>
@@ -102,7 +102,40 @@ function controls(){const ok=!!pdf;$("add").disabled=!ok;$("save").disabled=!ok;
 function select(a){choice=a;layer.querySelectorAll(".ann").forEach(x=>x.classList.toggle("sel",!!a&&x.dataset.id==a.id));if(a){$("font").value=a.font;$("size").value=a.size;$("color").value=a.color}controls()}
 function clearExport(){if(downloadUrl)URL.revokeObjectURL(downloadUrl);downloadUrl=null;$("ready").style.display="none";$("fallback").style.display="none"}
 async function openFile(file){if(!file)return;try{clearExport();message("PDF読み込み中…");original=new Uint8Array(await file.arrayBuffer());pdf=await pdfjsLib.getDocument({data:new Uint8Array(original)}).promise;items=[];pageNo=1;id=0;choice=null;$("saveName").value=file.name.replace(/\.pdf$/i,"")+"_書き込み.pdf";$("drop").style.display="none";$("stage").style.display="block";await render();message("PDFを読み込みました")}catch(e){console.error(e);message("PDFを読み込めません: "+e.message)}}
-async function render(){if(!pdf)return;try{if(renderTask){try{renderTask.cancel();await renderTask.promise}catch(e){}}const page=await pdf.getPage(pageNo),v=page.getViewport({scale:1.5}),canvas=$("paper");canvas.width=Math.ceil(v.width);canvas.height=Math.ceil(v.height);holder.style.width=canvas.width+"px";renderTask=page.render({canvasContext:canvas.getContext("2d"),viewport:v});await renderTask.promise;renderTask=null;select(null);drawAnnotations();controls()}catch(e){if(e.name!=="RenderingCancelledException"){console.error(e);message("ページ表示に失敗: "+e.message)}}}
+// High-DPI rendering: keep the editing layout in CSS pixels and render the PDF
+// at the physical pixel density of the screen. Limit the bitmap size for iPad.
+function outputScale(width,height,requested){
+  const maxPixels=14000000,maxDimension=8192;
+  return Math.max(1,Math.min(requested,maxDimension/width,maxDimension/height,Math.sqrt(maxPixels/(width*height))));
+}
+async function render(){
+  if(!pdf)return;
+  try{
+    if(renderTask){try{renderTask.cancel();await renderTask.promise}catch(e){}renderTask=null}
+    const page=await pdf.getPage(pageNo);
+    const viewport=page.getViewport({scale:1.5});
+    const canvas=$("paper");
+    const ratio=outputScale(viewport.width,viewport.height,Math.max(2,Math.min(3,window.devicePixelRatio||1)));
+    canvas.width=Math.ceil(viewport.width*ratio);
+    canvas.height=Math.ceil(viewport.height*ratio);
+    // Canvas backing pixels must not determine the displayed page size.
+    canvas.style.width=viewport.width+"px";
+    canvas.style.height=viewport.height+"px";
+    holder.style.width=viewport.width+"px";
+    renderTask=page.render({
+      canvasContext:canvas.getContext("2d"),
+      viewport,
+      transform:[ratio,0,0,ratio,0,0]
+    });
+    await renderTask.promise;
+    renderTask=null;
+    select(null);drawAnnotations();controls();
+  }catch(e){
+    if(e.name!=="RenderingCancelledException"){
+      console.error(e);message("ページ表示に失敗: "+e.message)
+    }
+  }
+}
 function add(x=.12,y=.14){const a={id:++id,page:pageNo,x:Math.min(.95,Math.max(0,x)),y:Math.min(.95,Math.max(0,y)),w:.45,h:.065,text:"ここに入力",font:$("font").value,size:Number($("size").value)||16,color:$("color").value};items.push(a);drawAnnotations();select(a);const t=layer.querySelector('[data-id="'+a.id+'"] textarea');t.focus();t.select()}
 function drawAnnotations(){layer.replaceChildren();for(const a of items.filter(v=>v.page===pageNo)){const d=document.createElement("div");d.className="ann";d.dataset.id=a.id;Object.assign(d.style,{left:a.x*100+"%",top:a.y*100+"%",width:a.w*100+"%",height:a.h*100+"%",fontFamily:fonts[a.font],fontSize:(a.size*1.5)+"px",color:a.color});const t=document.createElement("textarea");t.value=a.text;t.setAttribute("aria-label","追加する文字");t.onfocus=()=>select(a);t.oninput=()=>{a.text=t.value};t.onblur=()=>{a.w=Math.max(.08,Math.min(1,t.offsetWidth/layer.clientWidth));a.h=Math.max(.03,Math.min(1,t.offsetHeight/layer.clientHeight))};d.appendChild(t);
 const grip=document.createElement("div");grip.className="handle";grip.textContent="↔ 移動";d.appendChild(grip);grip.onpointerdown=e=>{e.preventDefault();select(a);grip.setPointerCapture(e.pointerId);let sx=e.clientX,sy=e.clientY,ox=a.x,oy=a.y;const move=ev=>{a.x=Math.max(0,Math.min(.99,ox+(ev.clientX-sx)/layer.clientWidth));a.y=Math.max(0,Math.min(.99,oy+(ev.clientY-sy)/layer.clientHeight));d.style.left=a.x*100+"%";d.style.top=a.y*100+"%"};const stop=()=>{grip.removeEventListener("pointermove",move);grip.removeEventListener("pointerup",stop);grip.removeEventListener("pointercancel",stop)};grip.addEventListener("pointermove",move);grip.addEventListener("pointerup",stop);grip.addEventListener("pointercancel",stop)};
@@ -115,7 +148,19 @@ function imageText(a){const scale=3,padding=4,lines=a.text.split("\n"),c=documen
 function saveLink(bytes){downloadUrl=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));let name=$("saveName").value.trim().replace(/[\\/:*?"<>|]/g,"_")||"書き込み.pdf";if(!/\.pdf$/i.test(name))name+=".pdf";const link=$("result");link.href=downloadUrl;link.download=name;link.textContent="「"+name+"」をダウンロード";$("ready").style.display="block";$("ready").scrollIntoView({behavior:"smooth",block:"nearest"});message("PDFを作成しました。ダウンロードリンクから別名で保存してください。")}
 $("save").onclick=async()=>{if(!original)return;const btn=$("save");btn.disabled=true;clearExport();message("PDFを作成しています…");try{const out=await PDFLib.PDFDocument.load(new Uint8Array(original));for(const a of items){if(!a.text.trim())continue;const page=out.getPage(a.page-1),sz=page.getSize(),p=imageText(a),png=await out.embedPng(p.bytes);page.drawImage(png,{x:a.x*sz.width,y:sz.height-a.y*sz.height-p.h,width:p.w,height:p.h})}saveLink(await out.save({useObjectStreams:false}))}
 catch(e){console.error(e);if(/encrypt|password/i.test(String(e))){const approved=window.confirm("このPDFは暗号化されているため、元の文字やリンクを維持したまま保存できません。\n\n代わりに、PDFの各ページを画像化して別名で保存しますか？\n\n※画像化すると、元のPDF内の文字検索・文字選択・ハイパーリンクは利用できなくなります。元のファイルは上書きしません。");if(approved){$("flatten").click()}else{message("保存をキャンセルしました。元のPDFは変更していません。")}}else{message("保存に失敗しました: "+(e.message||e))}}finally{btn.disabled=false}};
-$("flatten").onclick=async()=>{const btn=$("flatten");btn.disabled=true;message("画像化したPDFを作成しています…");try{const out=await PDFLib.PDFDocument.create();for(let i=1;i<=pdf.numPages;i++){const source=await pdf.getPage(i),view=source.getViewport({scale:1.5}),canvas=document.createElement("canvas");canvas.width=Math.ceil(view.width);canvas.height=Math.ceil(view.height);await source.render({canvasContext:canvas.getContext("2d"),viewport:view}).promise;const ctx=canvas.getContext("2d");for(const a of items.filter(x=>x.page===i)){ctx.fillStyle=a.color;ctx.textBaseline="top";ctx.font=(a.size*1.5)+"px "+fonts[a.font];a.text.split("\n").forEach((line,j)=>ctx.fillText(line,a.x*canvas.width+4,a.y*canvas.height+4+j*a.size*1.5*1.45))}const jpeg=await out.embedJpg(canvas.toDataURL("image/jpeg",.92)),page=out.addPage([view.width/1.5,view.height/1.5]);page.drawImage(jpeg,{x:0,y:0,width:page.getWidth(),height:page.getHeight()});message("ページ "+i+" / "+pdf.numPages+" を変換中…")}saveLink(await out.save());$("fallback").style.display="none";message("画像化PDFを作成しました。元PDFは上書きされません。文字検索やリンクは使えなくなります。")}
+$("flatten").onclick=async()=>{const btn=$("flatten");btn.disabled=true;message("画像化したPDFを作成しています…");try{const out=await PDFLib.PDFDocument.create();for(let i=1;i<=pdf.numPages;i++){const source=await pdf.getPage(i),view=source.getViewport({scale:1.5}),canvas=document.createElement("canvas");
+// Image-only fallback: render at higher resolution while keeping page dimensions.
+const ratio=outputScale(view.width,view.height,2.5);
+canvas.width=Math.ceil(view.width*ratio);canvas.height=Math.ceil(view.height*ratio);
+await source.render({canvasContext:canvas.getContext("2d"),viewport:view,transform:[ratio,0,0,ratio,0,0]}).promise;
+const ctx=canvas.getContext("2d");ctx.save();ctx.scale(ratio,ratio);
+for(const a of items.filter(x=>x.page===i)){
+  ctx.fillStyle=a.color;ctx.textBaseline="top";
+  ctx.font=(a.size*1.5)+"px "+fonts[a.font];
+  a.text.split("\n").forEach((line,j)=>ctx.fillText(line,a.x*view.width+4,a.y*view.height+4+j*a.size*1.5*1.45))
+}
+ctx.restore();
+const jpeg=await out.embedJpg(canvas.toDataURL("image/jpeg",.96)),page=out.addPage([view.width/1.5,view.height/1.5]);page.drawImage(jpeg,{x:0,y:0,width:page.getWidth(),height:page.getHeight()});message("ページ "+i+" / "+pdf.numPages+" を変換中…")}saveLink(await out.save());$("fallback").style.display="none";message("画像化PDFを作成しました。元PDFは上書きされません。文字検索やリンクは使えなくなります。")}
 catch(e){console.error(e);message("画像化保存に失敗しました: "+(e.message||e))}finally{btn.disabled=false}};
 controls();
 </script></body></html>
